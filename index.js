@@ -9,7 +9,6 @@ app.use(cors());
 app.use(express.json());
 
 //Connect MongoDB
-
 const { MongoClient, ServerApiVersion } = require("mongodb");
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.tuf9wrv.mongodb.net/?appName=Cluster0`;
 
@@ -28,6 +27,21 @@ async function run() {
     await client.connect();
 
     const menuCollection = client.db("bistroBossDB").collection("menu");
+    const reviewsCollection = client.db("bistroBossDB").collection("reviews");
+
+    // Menu Related Data
+    app.get("/menu", async (req, res) => {
+      const result = await menuCollection.find().toArray();
+      res.send(result);
+    });
+
+
+    // Review Related Data
+    app.get("/reviews", async (req, res) => {
+        const result = await reviewsCollection.find().toArray();
+        res.send(result);
+      });
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
