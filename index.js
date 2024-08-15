@@ -128,6 +128,12 @@ async function run() {
       res.send(result);
     });
 
+    app.post("/menu", verifyToken, verifyAdmin, async (req, res) => {
+      const data = req.body;
+      const result = await menuCollection.insertOne(data);
+      res.send(result);
+    })
+
     // Review Related API
     app.get("/reviews", async (req, res) => {
       const result = await reviewsCollection.find().toArray();
