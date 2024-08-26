@@ -1,5 +1,6 @@
 const express = require("express");
 const app = express();
+
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
@@ -8,6 +9,11 @@ const port = process.env.PORT || 5000;
 //middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.static("public"));
+
+const stripe = require("stripe")(
+  "sk_test_51PqUUZRvsgXyYSdSZfhP4kJNZBF7agXuSGb0VHOIVautmp73SRcn3OSNzjRGCdMvjc087K0BHUmjdjZZZ9LB1F3A00WlxWMS4P"
+);
 
 //Connect MongoDB
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
@@ -31,11 +37,12 @@ async function run() {
     const menuCollection = client.db("bistroBossDB").collection("menu");
     const reviewsCollection = client.db("bistroBossDB").collection("reviews");
     const cartsCollection = client.db("bistroBossDB").collection("carts");
+    const paymentsCollection = client.db("bistroBossDB").collection("payments");
 
     //middlewere
 
     const verifyToken = (req, res, next) => {
-      console.log("Inside verify token: ", req.headers.authorization); // Log all headers
+      // console.log("Inside verify token: ", req.headers.authorization); // Log all headers
 
       if (!req.headers.authorization) {
         return res.status(401).send({ message: "Unauthorized Access" });
@@ -133,16 +140,9 @@ async function run() {
       res.send(result);
     });
 
-    // app.get('/menu/:id', async (req, res) => {
-    //   const id = req.params.id;
-    //   const query = { _id: new ObjectId(id)};
-    //   const result = await menuCollection.findOne(query);
-    //   res.send(result);
-    // })
-
     app.get("/menu/:id", async (req, res) => {
       const id = req.params.id;
-      const query = { _id: id}
+      const query = { _id: id };
       const result = await menuCollection.findOne(query);
       res.send(result);
     });
@@ -209,6 +209,99 @@ async function run() {
       const query = { _id: new ObjectId(id) };
       const result = await cartsCollection.deleteOne(query);
       res.send(result);
+    });
+
+    //Payment Intent
+    app.post("/create-payment-intent", async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: "usd",
+        payment_method_types: ["card"],
+      });
+      res.send({
+        clientSecret: paymentIntent.client_secret,
+      });
+    });
+
+    // app.post("/create-payment-intent", async (req, res) => {
+    //   const { price } = req.body;
+    //   const amount = parseInt(price * 100);
+
+    //   // Check if amount meets the minimum requirement
+    //   if (amount < 50) {
+    //     // For USD, minimum is usually 50 cents
+    //     return res.status(400).send({
+    //       error:
+    //         "The amount must be greater than or equal to the minimum charge amount.",
+    //     });
+    //   }
+
+    //   const paymentIntent = await stripe.paymentIntents.create({
+    //     amount: amount,
+    //     currency: "usd",
+    //     payment_method_types: ["card"],
+    //   });
+
+    //   res.send({
+    //     clientSecret: paymentIntent.client_secret,
+    //   });
+    // });
+
+    //Payment Related API
+    app.get("/payments/:email", verifyToken, async (req, res) => {
+      const query = { email: req.params.email };
+      if (req.params.email !== req.decoded.email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      const result = await paymentsCollection.find(query).toArray();
+      res.send(result);
+    });
+
+    app.post("/payments", async (req, res) => {
+      const payment = req.body;
+      const paymentResult = await paymentsCollection.insertOne(payment);
+      // console.log("payment info", payment);
+
+      //delete each item from the cart
+      const query = {
+        _id: {
+          $in: payment.cartIds.map((id) => new ObjectId(id)),
+        },
+      };
+      const deleteResult = await cartsCollection.deleteMany(query);
+
+      res.send({ paymentResult, deleteResult });
+    });
+
+    //Stats or Analytics Related API
+    app.get("/adminStats", verifyToken, verifyAdmin, async (req, res) => {
+      const customers = await usersCollection.estimatedDocumentCount();
+      const products = await cartsCollection.estimatedDocumentCount();
+      const orders = await paymentsCollection.estimatedDocumentCount();
+
+      // const payments = await paymentsCollection.find().toArray();
+      // const revenue = payments.reduce((total,payment)=>total+payment.price,0);
+
+      // This is the efficient way to see total revenue.Here we need not to load all mongodb data
+
+      const result = await paymentsCollection
+        .aggregate([
+          {
+            $group: {
+              _id: null,
+              totalRevenue: {
+                $sum: "$price",
+              },
+            },
+          },
+        ])
+        .toArray();
+
+      const revenue = result.length > 0 ? result[0].totalRevenue : 0;
+
+      res.send({ customers, products, orders, revenue });
     });
 
     // Send a ping to confirm a successful connection
