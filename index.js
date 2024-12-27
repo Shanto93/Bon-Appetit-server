@@ -1,10 +1,13 @@
 const express = require("express");
 const app = express();
-
+// const formData = require("form-data");
+// const Mailgun = require("mailgun.js");
+// const mailgun = new Mailgun(formData);
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const port = process.env.PORT || 5000;
+// const mg = mailgun.client({username: 'api', key: 'd4e5c2e7d844553c12f3099b202847b6-777a617d-36aa5fa2'});
 
 //middleware
 app.use(cors());
@@ -31,7 +34,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
 
     const usersCollection = client.db("bistroBossDB").collection("users");
     const menuCollection = client.db("bistroBossDB").collection("menu");
@@ -183,6 +186,12 @@ async function run() {
       res.send(result);
     });
 
+    app.post("/reviews", async (req, res) => {
+      const reviewItem = req.body;
+      const result = await reviewsCollection.insertOne(reviewItem);
+      res.send(result);
+    });
+
     //Cart Related API
     app.get("/carts", async (req, res) => {
       const email = req.query.email;
@@ -272,10 +281,67 @@ async function run() {
       };
       const deleteResult = await cartsCollection.deleteMany(query);
 
+      //Send user email about payment confirmation.
+      // mg.messages.create('sandboxe534a870f50f4b30b9aa87a9ddf9f566.mailgun.org', {
+      //   from: "Excited User <mailgun@sandbox-123.mailgun.org>",
+      //   to: ["shantoislam7363@gmail.com"],
+      //   subject: "Payment Confirmation",
+      //   text: "Thank You for your payment!",
+      //   html: `<h2>Thank you for your order</h2>
+      //   <h4>Your Transaction ID is <strong>${payment.transactionId}</strong></h4>
+      //   <p>We would like to get your feedback about the food</p>
+      //   `
+      // })
+      // .then(msg => console.log(msg))
+      // .catch(err => console.error(err));
+
       res.send({ paymentResult, deleteResult });
     });
 
-    //Stats or Analytics Related API
+    //Stats for User
+    // User-specific stats API
+    app.get("/userStats/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+
+      // Check if the requesting user matches the email in the token
+      if (email !== req.decoded.email) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+
+      try {
+        // Fetch payments made by the user
+        const paymentsQuery = { email: email };
+        const payments = await paymentsCollection.find(paymentsQuery).toArray();
+
+        // Count the number of orders
+        const ordersCount = payments.length;
+
+        // Calculate total amount spent by the user
+        const totalSpent = payments
+          .reduce((acc, payment) => acc + payment.price, 0)
+          .toFixed(2);
+
+        // Gather any additional stats related to bookings or other user-related collections
+        // Example: Fetch user bookings (if you have a bookings collection)
+
+        //getting review
+        const reviews = await reviewsCollection.find(paymentsQuery).toArray();
+        const totalReviews = reviews.length;
+
+        // Send the response with the aggregated data
+        res.send({
+          ordersCount,
+          totalSpent,
+          payments,
+          totalReviews,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    //Stats or Analytics Related API for admin
     app.get("/adminStats", verifyToken, verifyAdmin, async (req, res) => {
       const customers = await usersCollection.estimatedDocumentCount();
       const products = await cartsCollection.estimatedDocumentCount();
@@ -304,6 +370,55 @@ async function run() {
       res.send({ customers, products, orders, revenue });
     });
 
+    //Using aggregate pipeline
+
+    app.get("/orderStat", async (req, res) => {
+      try {
+        const result = await paymentsCollection
+          .aggregate([
+            {
+              $unwind: "$menuItemIds",
+            },
+            {
+              $addFields: {
+                menuItemIds: { $toObjectId: "$menuItemIds" },
+              },
+            },
+            {
+              $lookup: {
+                from: "menu",
+                localField: "menuItemIds",
+                foreignField: "_id",
+                as: "menuItems",
+              },
+            },
+            {
+              $unwind: "$menuItems",
+            },
+            {
+              $group: {
+                _id: "$menuItems.category",
+                quantity: { $sum: 1 },
+                revenue: { $sum: "$menuItems.price" },
+              },
+            },
+            {
+              $project: {
+                _id: 0,
+                category: "$_id",
+                quantity: "$quantity",
+                revenue: "$revenue",
+              },
+            },
+          ])
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching order stats:", error);
+        res.status(500).send({ message: "Error fetching order stats" });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
@@ -317,9 +432,9 @@ async function run() {
 run().catch(console.dir);
 
 app.get("/", (req, res) => {
-  res.send("bistro boss is running");
+  res.send("Bon Appetits is running");
 });
 
 app.listen(port, () => {
-  console.log(`Bistro Boss id running on port ${port}`);
+  console.log(`Bon Appetits id running on port ${port}`);
 });
